@@ -102,9 +102,6 @@ char get_byte() {
 
 ---
 
-✅ Now, GitHub will show two separate code sections inside your repo file.  
-
-⚡ If you want to push this to GitHub, here are the **basic commands** (assuming you already created a repo):  
 
 ```bash
 git init
