@@ -1,0 +1,123 @@
+// ------------------ BLYNK ------------------------
+#define BLYNK_TEMPLATE_ID "TMPL3_sJ7Bxj6"
+#define BLYNK_TEMPLATE_NAME "Smoke Detector"
+#define BLYNK_FIRMWARE_VERSION "0.1.0"
+#define BLYNK_PRINT Serial
+#define USE_NODE_MCU_BOARD
+#include "BlynkEdgent.h"
+
+// ------------------ MQ2 Sensor -------------------
+#include <MQUnifiedsensor.h>
+#define Board "NodeMCU"
+#define Voltage_Resolution 3.3
+#define ADC_Bit_Resolution 10
+#define RatioMQ2CleanAir 9.83
+#define MQ2_PIN A0
+MQUnifiedsensor mq2(Board, Voltage_Resolution, ADC_Bit_Resolution, MQ2_PIN, "MQ-2");
+
+// ------------------ Firebase ---------------------
+#include <ESP8266WiFi.h>
+#include <FirebaseESP8266.h>
+
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+// ------------------ Hardware ---------------------
+#define BUZZ 12  // D6
+#define LED  14  // D5
+
+BlynkTimer timer;
+
+// ------------------ Setup ------------------------
+void setup() {
+  Serial.begin(115200);
+  delay(100);
+
+  BlynkEdgent.begin();
+
+  pinMode(BUZZ, OUTPUT);
+  pinMode(LED, OUTPUT);
+  digitalWrite(BUZZ, LOW);
+  digitalWrite(LED, LOW);
+
+  // MQ2 Calibration
+  mq2.setRegressionMethod(1);
+  mq2.setA(605.18); mq2.setB(-3.937);
+  mq2.init();
+
+  Serial.println("Calibrating MQ2...");
+  float calcR0 = 0;
+  for (int i = 0; i < 10; i++) {
+    mq2.update();
+    calcR0 += mq2.calibrate(RatioMQ2CleanAir);
+    delay(1000);
+  }
+  mq2.setR0(calcR0 / 10);
+  Serial.println("Calibration complete. R0 = " + String(mq2.getR0()));
+
+  // Firebase Config
+  config.host = "smoke-detector-fc567-default-rtdb.asia-southeast1.firebasedatabase.app";
+  config.signer.tokens.legacy_token = "LGbY9ll2EQdDnVxyzt5k6LJceWI32ngOI09W6pNJ";
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+
+  // Enable NTP time (India GMT+5:30)
+  configTime(19800, 0, "pool.ntp.org");
+
+  // Start sending data every 1 second
+  timer.setInterval(1000L, sendSensorData);
+}
+
+// ------------------ Loop -------------------------
+void loop() {
+  BlynkEdgent.run();
+  timer.run();
+}
+
+// ------------------ Send Sensor Data -------------
+void sendSensorData() {
+  mq2.update();
+
+  mq2.setA(1000.0); mq2.setB(-2.186); // LPG
+  float lpg = mq2.readSensor();
+
+  mq2.setA(605.18); mq2.setB(-3.937); // CO
+  float co = mq2.readSensor();
+
+  mq2.setA(102.2); mq2.setB(-2.473); // Smoke
+  float smoke = mq2.readSensor();
+
+  Serial.print("LPG: "); Serial.print(lpg);
+  Serial.print(" ppm | CO: "); Serial.print(co);
+  Serial.print(" ppm | Smoke: "); Serial.println(smoke);
+
+  // Send to Blynk
+  Blynk.virtualWrite(V1, smoke);
+  Blynk.virtualWrite(V2, lpg);
+  Blynk.virtualWrite(V3, co);
+
+  // ------------------ Firebase with Timestamp ------------------
+  time_t now = time(nullptr);
+  char timestamp[32];
+  strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", localtime(&now));
+
+  String path = "/logs/" + String(timestamp);
+  Firebase.setFloat(fbdo, path + "/lpg", lpg);
+  Firebase.setFloat(fbdo, path + "/co", co);
+  Firebase.setFloat(fbdo, path + "/smoke", smoke);
+
+  // Alert logic
+  if (smoke > 1 || lpg > 1) {
+    Blynk.logEvent("smoke", "Smoke or LPG Detected!");
+    digitalWrite(BUZZ, HIGH);
+    digitalWrite(LED, HIGH);
+  } else {
+    digitalWrite(BUZZ, LOW);
+    digitalWrite(LED, LOW);
+  }
+}
+
+// ------------------ Optional Buttons ------------------
+BLYNK_WRITE(V4) {} 
+BLYNK_WRITE(V5) {}
